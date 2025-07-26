@@ -1,120 +1,152 @@
-import {Command} from '@oclif/core';
-import {getGeminiModel} from '../services/gemini';
-import * as fs from 'fs-extra';
+/**
+ * @license
+ * Copyright 2025 Google LLC
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import * as path from 'path';
-import {homedir} from 'os';
+import { homedir } from 'os';
+import { SlashCommand, CommandContext, CommandKind } from './types.js';
+import { Config, GeminiClient } from '@google/gemini-cli-core';
 
-export default class Goal extends Command {
-  static description = `Manages learning goals and tracks progress.
-This command acts as a router for various subcommands to handle your learning journey.`;
+const slugify = (text: string) => {
+  return text.toString().toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w-]+/g, '')
+    .replace(/--+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/, '');
+};
 
-  static examples = [
-    `$ gemini goal set "Master TypeScript for backend development"`,
-    `$ gemini goal log "Completed the 'interfaces' chapter."`,
-    `$ gemini goal log --file ./src/code.ts`,
-    `$ gemini goal status`,
-    `$ gemini goal suggest`,
-    `$ gemini goal review ./src/code.ts`,
-  ];
-
-  // Allow flexible arguments for subcommands
-  static strict = false;
-
+class GoalExecutor {
   private geminaDir = path.join(homedir(), '.gemina');
-  private roadmapFile = path.join(this.geminaDir, 'roadmap.md');
-  private logFile = path.join(this.geminaDir, 'log.md');
+  private activeGoalFile = path.join(this.geminaDir, 'active_goal.txt');
+  private config: Config;
+  private geminiClient!: GeminiClient;
+  private isInitialized = false;
 
-  async run(): Promise<void> {
-    const {argv} = await this.parse(Goal);
-    const subcommand = argv[0] as string | undefined;
+  constructor(config: Config) {
+    this.config = config;
+    if (!fs.existsSync(this.geminaDir)) {
+      fs.mkdirSync(this.geminaDir, { recursive: true });
+    }
+  }
 
-    await this.ensureGeminaDirectory();
+  private async initialize(): Promise<void> {
+    if (this.isInitialized) return;
+    this.geminiClient = this.config.getGeminiClient();
+    if (!this.geminiClient.isInitialized()) {
+      const cgConfig = this.config.getContentGeneratorConfig();
+      await this.geminiClient.initialize(cgConfig);
+    }
+    this.isInitialized = true;
+  }
+
+  private async getActiveGoalDir(): Promise<string> {
+    if (!fs.existsSync(this.activeGoalFile)) {
+      throw new Error('No active goal. Set one with /goal set <name> "[desc]"');
+    }
+    const activeGoalName = await fsp.readFile(this.activeGoalFile, 'utf-8');
+    const goalDir = path.join(this.geminaDir, activeGoalName);
+    if (!fs.existsSync(goalDir)) {
+        throw new Error(`The active goal "${activeGoalName}" directory does not exist. Please set a new one.`);
+    }
+    return goalDir;
+  }
+
+  async run(args: string) {
+    await this.initialize();
+    const parts = args.trim().split(' ');
+    const subcommand = parts[0] || 'help';
+    const subArgs = parts.slice(1);
 
     switch (subcommand) {
-      case 'set':
-        await this.runSet(argv.slice(1));
-        break;
-      case 'log':
-        await this.runLog(argv.slice(1));
-        break;
-      case 'status':
-        await this.runStatus();
-        break;
-      case 'suggest':
-        await this.runSuggest();
-        break;
-      case 'review':
-        await this.runReview(argv.slice(1));
-        break;
-      default:
-        this.log('Invalid subcommand. Please use one of: set, log, status, suggest, review.');
-        this._help();
+      case 'set': return this.set(subArgs);
+      case 'log': return this.log(subArgs);
+      case 'status': return this.status();
+      case 'suggest': return this.suggest();
+      case 'review': return this.review(subArgs[0]);
+      case 'list': return this.list();
+      case 'switch': return this.switch(subArgs.join(' '));
+      case 'help': return this.help();
+      default: return this.help();
     }
   }
 
-  private async ensureGeminaDirectory(): Promise<void> {
-    await fs.ensureDir(this.geminaDir);
+  private help(): string {
+    return `Goal Command Usage:
+  /goal <subcommand> [arguments]
+
+Subcommands:
+  set <name> "[desc]"  - Set a new goal.
+  log [message]        - Log progress for the active goal.
+  log --file [path]    - Log progress from a file.
+  status               - Show the status of the active goal.
+  suggest              - Get a suggestion for the next step.
+  review [path]        - Request a code review for a file.
+  list                 - List all your goals.
+  switch <name>        - Switch the active goal.
+  help                 - Show this help message.`;
   }
 
-  private async runSet(args: string[]): Promise<void> {
-    const goalDescription = args.join(' ');
-    if (!goalDescription) {
-      this.error('Please provide a goal description. Example: gemini goal set "Learn Next.js"');
-      return;
+  private async set(args: string[]): Promise<string> {
+    const [name, ...descParts] = args;
+    const description = descParts.join(' ').replace(/^"|"$/g, '');
+
+    if (!name || !description) {
+      return 'Usage: /goal set <name> "[description]"\nExample: /goal set info-pro-exam "정보처리기사 실기 시험 합격하기"';
     }
 
-    this.log('Generating a personalized roadmap... (this may take a moment)');
-    const model = getGeminiModel('gemini-pro');
-    const prompt = `You are an expert learning architect. Based on the user's goal, create a detailed, step-by-step roadmap in Markdown format. The user's goal is: "${goalDescription}". Focus on the "정보처리기사 실기" certification exam. Break it down into major sections and smaller, actionable tasks.`;
+    const goalSlug = slugify(name);
+    const goalDir = path.join(this.geminaDir, goalSlug);
 
+    if (fs.existsSync(goalDir)) {
+      return `Error: A goal named "${goalSlug}" already exists.`;
+    }
+    await fsp.mkdir(goalDir, { recursive: true });
+
+    const prompt = `You are an expert learning architect. Based on the user's goal, create a detailed, step-by-step roadmap in Markdown format. The user's goal is: "${description}". Focus on the "정보처리기사 실기" certification exam. Break it down into major sections and smaller, actionable tasks.`;
+    
     try {
-      const result = await model.generateContent(prompt);
-      const response = result.response;
-      const roadmap = response.text();
-      
-      await fs.writeFile(this.roadmapFile, roadmap);
-      this.log(`\n✅ Roadmap successfully saved to ${this.roadmapFile}`);
-      this.log('\nTo see your roadmap, run: gemini goal status');
-    } catch (error) {
-      this.error('Failed to generate roadmap from Gemini API.', {exit: 1});
+      const result = await this.geminiClient.generateContent([{ role: 'user', parts: [{ text: prompt }] }], {}, new AbortController().signal);
+      const roadmap = result.candidates?.[0]?.content?.parts?.[0]?.text || 'Could not generate a roadmap.';
+      await fsp.writeFile(path.join(goalDir, 'roadmap.md'), roadmap);
+      await fsp.writeFile(this.activeGoalFile, goalSlug);
+      return `✅ New goal set: "${name}"\nRoadmap saved and set as active goal.`;
+    } catch (e) {
+      return `Error generating roadmap: ${(e as Error).message}`;
     }
   }
 
   private async runLog(args: string[]): Promise<void> {
+    const model = getGeminiModel('gemini-pro');
+    console.log(JSON.stringify(model, null, 2));
+
     let contentToLog: string;
-    // Super basic flag parsing for now
-    if (args[0] === '--file' && args[1]) {
-      const filePath = path.resolve(args[1]);
-      if (!await fs.pathExists(filePath)) {
-        this.error(`File not found: ${filePath}`);
-        return;
-      }
-      const fileContent = await fs.readFile(filePath, 'utf-8');
-      contentToLog = `Logged content from file ${args[1]}:\n---\n${fileContent}\n---`;
-    } else {
-      contentToLog = args.join(' ');
-    }
 
-    if (!contentToLog) {
-      this.error('Please provide a message to log or a file path. Example: gemini goal log "Finished module 3"');
+    if (args.length === 0) {
+      // TODO: Implement automatic logging from conversation history
+      this.log('Automatic logging from conversation history is not yet implemented.');
       return;
-    }
+    }    if (args[0] === '--file' && args[1]) {      const filePath = path.resolve(args[1]);      if (!fs.existsSync(filePath)) {        return `Error: File not found: ${filePath}`;      }      const fileContent = await fsp.readFile(filePath, 'utf-8');      contentToLog = `Logged content from file ${args[1]}:
+---
+${fileContent}
+---`;    } else {      contentToLog = args.join(' ');    }    if (!contentToLog) {      this.error('Please provide a message to log or a file path. Example: gemini goal log "Finished module 3"');      return '';    }    const timestamp = new Date().toISOString();    const logEntry = `
 
-    const timestamp = new Date().toISOString();
-    const logEntry = `\n\n---\n[LOG - ${timestamp}]\n${contentToLog}`;
+---
+[LOG - ${timestamp}]
+${contentToLog}`;    await fsp.appendFile(logFile, logEntry);    this.log(`✅ Log entry added to ${logFile}`);    return '';  }
 
-    await fs.appendFile(this.logFile, logEntry);
-    this.log(`✅ Log entry added to ${this.logFile}`);
-  }
-
-  private async runStatus(): Promise<void> {
-    if (!await fs.pathExists(this.roadmapFile)) {
+  private async status(): Promise<void> {
+    if (!fs.existsSync(this.roadmapFile)) {
       this.error('No roadmap found. Please set a goal first using: gemini goal set "Your Goal"');
       return;
     }
 
-    const roadmap = await fs.readFile(this.roadmapFile, 'utf-8');
-    const logs = await fs.pathExists(this.logFile) ? await fs.readFile(this.logFile, 'utf-8') : 'No logs yet.';
+    const roadmap = await fsp.readFile(this.roadmapFile, 'utf-8');
+    const logs = fs.existsSync(this.logFile) ? await fsp.readFile(this.logFile, 'utf-8') : 'No logs yet.';
 
     this.log('Analyzing your progress...');
     const model = getGeminiModel('gemini-pro');
@@ -138,16 +170,16 @@ Based on the logs, what has the user completed? What's the next logical step on 
     }
   }
 
-  private async runSuggest(): Promise<void> {
-    if (!await fs.pathExists(this.roadmapFile)) {
+  private async suggest(): Promise<void> {
+    if (!fs.existsSync(this.roadmapFile)) {
       this.error('No roadmap found. Please set a goal first using: gemini goal set "Your Goal"');
       return;
     }
     
     this.log('Figuring out the best next step for you...');
     const model = getGeminiModel('gemini-pro');
-    const roadmap = await fs.readFile(this.roadmapFile, 'utf-8');
-    const logs = await fs.pathExists(this.logFile) ? await fs.readFile(this.logFile, 'utf-8') : 'No logs yet.';
+    const roadmap = await fsp.readFile(this.roadmapFile, 'utf-8');
+    const logs = fs.existsSync(this.logFile) ? await fsp.readFile(this.logFile, 'utf-8') : 'No logs yet.';
 
     const prompt = `You are a motivational learning coach. Based on the user's roadmap and current progress, suggest one single, concrete, and actionable next task. Keep it small and encouraging.
 
@@ -169,38 +201,61 @@ What is the very next thing the user should do?`;
     }
   }
 
-  private async runReview(args: string[]): Promise<void> {
-    const filePath = args[0];
+  private async review(filePath: string): Promise<string> {
     if (!filePath) {
-      this.error('Please provide a file path to review. Example: gemini goal review ./my-code.js');
-      return;
+      return 'Error: Please provide a file path to review.';
     }
-
     const absolutePath = path.resolve(filePath);
-    if (!await fs.pathExists(absolutePath)) {
-      this.error(`File not found: ${absolutePath}`);
-      return;
+    if (!fs.existsSync(absolutePath)) {
+      return `Error: File not found: ${absolutePath}`;
     }
+    const fileContent = await fsp.readFile(absolutePath, 'utf-8');
+    const prompt = `You are a senior software engineer conducting a code review. The user is a student preparing for the "정보처리기사" exam. Provide constructive feedback on the following code. Focus on correctness, clarity, and best practices relevant to the exam.\n\n**Code to review:**\n\`\`\`\n${fileContent}\n\`\`\`\n\n**Feedback:**\nProvide your review in Markdown format.`;
+    const result = await this.geminiClient.generateContent([{role: 'user', parts: [{text: prompt}]}], {}, new AbortController().signal);
+    return result.candidates?.[0]?.content?.parts?.[0]?.text || 'Could not get a review.';
+  }
 
-    const fileContent = await fs.readFile(absolutePath, 'utf-8');
-    
-    this.log(`Requesting a review for ${filePath}...`);
-    const model = getGeminiModel('gemini-pro');
-    const prompt = `You are a senior software engineer conducting a code review. The user is a student preparing for the "정보처리기사" exam. Provide constructive feedback on the following code. Focus on correctness, clarity, and best practices relevant to the exam.
+  private list(): string {
+    const entries = fs.readdirSync(this.geminaDir, { withFileTypes: true });
+    const goalDirs = entries.filter(dirent => dirent.isDirectory()).map(dirent => dirent.name);
+    if (goalDirs.length === 0) {
+      return 'No goals found. Set your first one with `/goal set <name> "[desc]"` ';
+    }
+    let activeGoal = '';
+    if (fs.existsSync(this.activeGoalFile)) {
+        activeGoal = fs.readFileSync(this.activeGoalFile, 'utf-8');
+    }
+    const goalList = goalDirs.map(dir => dir === activeGoal ? `* ${dir} (active)` : `- ${dir}`).join('\n');
+    return `Available goals:\n${goalList}`;
+  }
 
-**Code to review:**
-```
-${fileContent}
-```
-
-**Feedback:**
-Provide your review in Markdown format.`;
-
-    try {
-      const result = await model.generateContent(prompt);
-      const response = result.response;
-      this.log(response.text());
-    } catch (error) {
-      this.error('Failed to get review from Gemini API.', {exit: 1});
-    }}
+  private async switch(goalName: string): Promise<string> {
+    if (!goalName) {
+        return 'Error: Please provide a goal name to switch to.';
+    }
+    const goalDir = path.join(this.geminaDir, goalName);
+    if (!fs.existsSync(goalDir)) {
+      return `Error: Goal "${goalName}" not found.`;
+    }
+    await fsp.writeFile(this.activeGoalFile, goalName);
+    return `Switched to goal: ${goalName}`;
+  }
 }
+
+export const goalCommand: SlashCommand = {
+  name: 'goal',
+  description: 'Manage your learning goals. Use `/goal help` to see subcommands.',
+  kind: CommandKind.BUILT_IN,
+  action: async (context, args) => {
+    if (!context.services.config) {
+        return { type: 'message', messageType: 'error', content: 'Configuration not available.' };
+    }
+    try {
+      const executor = new GoalExecutor(context.services.config);
+      const resultText = await executor.run(args);
+      return { type: 'message', messageType: 'info', content: resultText };
+    } catch (e) {
+      return { type: 'message', messageType: 'error', content: (e as Error).message };
+    }
+  },
+};

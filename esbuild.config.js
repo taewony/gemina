@@ -16,16 +16,16 @@ const pkg = require(path.resolve(__dirname, 'package.json'));
 
 esbuild
   .build({
-    entryPoints: ['packages/cli/index.ts'],
+    entryPoints: ['src/gemini.tsx'],
     bundle: true,
     outfile: 'bundle/gemini.js',
     platform: 'node',
     format: 'esm',
-    external: [],
+    external: ['@google/genai'],
     alias: {
       'is-in-ci': path.resolve(
         __dirname,
-        'packages/cli/src/patches/is-in-ci.ts',
+        'src/patches/is-in-ci.ts',
       ),
     },
     define: {
