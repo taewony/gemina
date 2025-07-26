@@ -18,6 +18,7 @@ import { corgiCommand } from '../ui/commands/corgiCommand.js';
 import { docsCommand } from '../ui/commands/docsCommand.js';
 import { editorCommand } from '../ui/commands/editorCommand.js';
 import { extensionsCommand } from '../ui/commands/extensionsCommand.js';
+import { goalCommand } from '../ui/commands/goal.js';
 import { helpCommand } from '../ui/commands/helpCommand.js';
 import { ideCommand } from '../ui/commands/ideCommand.js';
 import { mcpCommand } from '../ui/commands/mcpCommand.js';
@@ -56,6 +57,7 @@ export class BuiltinCommandLoader implements ICommandLoader {
       docsCommand,
       editorCommand,
       extensionsCommand,
+      goalCommand,
       helpCommand,
       ideCommand(this.config),
       memoryCommand,
