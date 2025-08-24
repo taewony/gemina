@@ -1,0 +1,13 @@
+# ~/.gemini/commands/study:start.toml
+
+description="하루 학습을 마무리하며 오늘 학습한 내용을 정리합니다."
+
+prompt = """
+
+/logs 폴더에 YYYY-MM-DD-study-log.md 학습일지 파일에 아래 내용 저장 (없으면 생성하고, 있으면 뒤에 append함):
+그리고 오늘 대화를 통해 내가 학습한 내용을 당신이 간략히 정리해서 오늘 학습일지에 추가해 주세요.
+
+### 오늘 학습한 내용:
+- {{args}}
+
+"""

@@ -1,0 +1,12 @@
+# ~/.gemini/commands/study:start.toml
+
+description="하루 학습을 시작하며 오늘의 핵심 목표를 설정합니다."
+
+prompt = """
+
+/logs 폴더에 YYYY-MM-DD-study-log.md 파일에 아래 내용 저장 (없으면 생성하고, 있으면 뒤에 append함):
+
+### 오늘의 학습 목표:
+- {{args}}
+
+"""
