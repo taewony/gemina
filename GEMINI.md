@@ -17,7 +17,7 @@
 ├── GEMINI.md            # workspacke 혹은 현재 작업 project를 지정한다.
 ├── plans                # 학습 및 작업 계획 문서
 ├── ComposeLab           # Compose UI App 프로젝트
-├── openknights_mobile   # 모바일 앱 예시 (오픈소스 경진대회)
+├── openknights_mobile   # 모바일 앱 예시 (오픈소스 경진대회) 프로젝트
 ├── your_project         # 학생 프로젝트
 ├── docs                 # 학습 결과 문서, 기능 설계 문서
 └── logs                 # 학습 일지
